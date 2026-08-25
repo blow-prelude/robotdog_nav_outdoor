@@ -77,6 +77,19 @@ def generate_launch_description():
         }.items(),
     )
 
+    # odom QoS relay: mavros publishes /mavros/local_position/odom as BEST_EFFORT,
+    # but Nav2 controller_server subscribes RELIABLE -> nothing gets through.
+    # This relay bridges the two QoS regimes by re-publishing to /odom (RELIABLE).
+    odom_relay_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("mavros_odom_relay"),
+                "launch",
+                "mavros_odom_relay.launch.py",
+            )
+        )
+    )
+
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(nav2_launch_file),
         launch_arguments={
@@ -112,6 +125,7 @@ def generate_launch_description():
             declare_use_mid360,
             go2w_driver_launch,
             mavros_launch,
+            odom_relay_launch,
             nav2_launch,
             auto_set_origin_node,
         ]
