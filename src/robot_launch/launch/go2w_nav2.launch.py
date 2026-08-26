@@ -15,7 +15,6 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     pkg_share = get_package_share_directory("robot_launch")
     default_params = os.path.join(pkg_share, "config", "go2w_nav2.yaml")
-    default_rviz = os.path.join(pkg_share, "config", "nav2.rviz")
 
     livox_share = get_package_share_directory("livox_ros_driver2")
     mid360_launch_file = os.path.join(livox_share, "launch", "msg_MID360_launch.py")
@@ -30,27 +29,21 @@ def generate_launch_description():
         default_value=default_params,
         description="Nav2 + nav2_input_bridge multi-node YAML (go2w_nav2.yaml).",
     )
-    declare_rviz_config = DeclareLaunchArgument(
-        "rviz_config",
-        default_value=default_rviz,
-        description="RViz2 config path.",
-    )
-    declare_use_rviz = DeclareLaunchArgument(
-        "use_rviz",
-        default_value="true",
-        description="Start RViz2.",
-    )
     declare_use_mid360 = DeclareLaunchArgument(
         "use_mid360",
         default_value="true",
         description="Launch Livox MID360 driver (msg_MID360_launch from livox_ros_driver2).",
     )
+    declare_use_foxglove = DeclareLaunchArgument(
+        "use_foxglove",
+        default_value="true",
+        description="Start foxglove_bridge for Foxglove Studio.",
+    )
 
     params_file = LaunchConfiguration("params_file")
     use_sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
-    rviz_config = LaunchConfiguration("rviz_config")
-    use_rviz = LaunchConfiguration("use_rviz")
     use_mid360 = LaunchConfiguration("use_mid360")
+    use_foxglove = LaunchConfiguration("use_foxglove")
 
     sim_time_param = {"use_sim_time": use_sim_time}
 
@@ -104,14 +97,36 @@ def generate_launch_description():
         remappings=[("goal_pose", "/goal_pose")],
     )
 
-    rviz_node = Node(
-        condition=IfCondition(use_rviz),
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        arguments=["-d", rviz_config],
-        parameters=[sim_time_param],
+    foxglove_bridge_node = Node(
+        package="foxglove_bridge",
+        executable="foxglove_bridge",
+        name="foxglove_bridge",
         output="screen",
+        parameters=[
+            {
+                "port": 8765,
+                "address": "0.0.0.0",
+                "topic_whitelist": [
+                    "^/tf$",
+                    "^/tf_static$",
+                    "^/odom$",
+                    "^/local_costmap/costmap$",
+                    "^/received_global_plan$",
+                    "^/plan$",
+                    "^/lookahead_point$",
+                    "^/lookahead_collision_arc$",
+                    "^/goal_pose$",
+                    #"^/livox/lidar$",
+                    "^/cmd_vel$",
+                ],
+                "service_whitelist": ["(?!)"],
+                "client_topic_whitelist": ["(?!)"],
+                "param_whitelist": ["(?!)"],
+                "capabilities": ["connectionGraph"],
+                "tls": False,
+            }
+        ],
+        condition=IfCondition(use_foxglove),
     )
 
     lc_manager_node = Node(
@@ -126,9 +141,8 @@ def generate_launch_description():
         [
             declare_use_sim_time,
             declare_params_file,
-            declare_rviz_config,
-            declare_use_rviz,
             declare_use_mid360,
+            declare_use_foxglove,
             mid360_driver,
             static_tf_base_lidar,
             static_tf_map_odom,
@@ -136,6 +150,6 @@ def generate_launch_description():
             controller_server_node,
             straight_planner_node,
             lc_manager_node,
-            rviz_node,
+            foxglove_bridge_node,
         ]
     )

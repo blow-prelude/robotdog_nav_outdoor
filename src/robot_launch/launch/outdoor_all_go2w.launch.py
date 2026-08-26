@@ -42,21 +42,21 @@ def generate_launch_description():
         default_value="/dev/ttyACM0:230400",
         description="MAVROS FCU URL.",
     )
-    declare_use_rviz = DeclareLaunchArgument(
-        "use_rviz",
-        default_value="true",
-        description="Start RViz2.",
-    )
     declare_use_mid360 = DeclareLaunchArgument(
         "use_mid360",
         default_value="true",
         description="Launch Livox MID360 driver.",
     )
+    declare_use_foxglove = DeclareLaunchArgument(
+        "use_foxglove",
+        default_value="true",
+        description="Start foxglove_bridge for Foxglove Studio.",
+    )
 
     fcu_url = LaunchConfiguration("fcu_url")
     use_auto_origin = LaunchConfiguration("use_auto_origin")
-    use_rviz = LaunchConfiguration("use_rviz")
     use_mid360 = LaunchConfiguration("use_mid360")
+    use_foxglove = LaunchConfiguration("use_foxglove")
 
     # go2w_driver launch
     go2w_driver_launch = IncludeLaunchDescription(
@@ -93,8 +93,8 @@ def generate_launch_description():
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(nav2_launch_file),
         launch_arguments={
-            "use_rviz": use_rviz,
             "use_mid360": use_mid360,
+            "use_foxglove": use_foxglove,
         }.items(),
     )
 
@@ -121,8 +121,8 @@ def generate_launch_description():
         [
             declare_use_auto_origin,
             declare_fcu_url,
-            declare_use_rviz,
             declare_use_mid360,
+            declare_use_foxglove,
             go2w_driver_launch,
             mavros_launch,
             odom_relay_launch,
