@@ -86,6 +86,9 @@ def generate_launch_description():
         name="controller_server",
         output="screen",
         parameters=[params_file, sim_time_param],
+        remappings=[
+            ("/cmd_vel", "/cmd_vel_nav"),
+        ],
     )
 
     straight_planner_node = Node(

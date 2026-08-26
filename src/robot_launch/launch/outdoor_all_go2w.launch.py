@@ -98,6 +98,26 @@ def generate_launch_description():
         }.items(),
     )
 
+    twist_mux_yaml = os.path.join(robot_launch_share, "config", "twist_mux.yaml")
+    twist_mux_node = Node(
+        package="twist_mux",
+        executable="twist_mux",
+        name="twist_mux",
+        parameters=[twist_mux_yaml],
+        output="screen",
+        remappings=[("/cmd_vel_out", "/cmd_vel")],
+    )
+
+    remote_override_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("remote_override"),
+                "launch",
+                "remote_override.launch.py",
+            )
+        )
+    )
+
     auto_set_origin_node = Node(
         package="robot_launch",
         executable="auto_set_gp_origin",
@@ -127,6 +147,8 @@ def generate_launch_description():
             mavros_launch,
             odom_relay_launch,
             nav2_launch,
+            twist_mux_node,
+            remote_override_launch,
             auto_set_origin_node,
         ]
     )
