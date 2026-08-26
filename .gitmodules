@@ -1,8 +1,8 @@
 [submodule "src/driver/livox_ros_driver2"]
 	path = src/driver/livox_ros_driver2
-	url = git@github.com:VisionTrekker/livox_ros_driver2.git
-	branch = main
-[submodule "src/slam/FAST_LIO"]
-	path = src/slam/FAST_LIO
-	url = git@github.com:VisionTrekker/FAST_LIO.git
-	branch = ROS2
+	url = git@gitee.com:Baicai2023/livox_ros_driver2.git
+	branch = master
+# [submodule "src/slam/FAST_LIO"]
+# 	path = src/slam/FAST_LIO
+# 	url = git@github.com:VisionTrekker/FAST_LIO.git
+# 	branch = ROS2
