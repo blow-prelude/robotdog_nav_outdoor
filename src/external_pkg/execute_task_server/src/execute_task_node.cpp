@@ -14,7 +14,7 @@ using json = nlohmann::json;
 
 /**
  * @brief ExecuteTask Service Server for receiving multi-goal tasks from command center
- * 
+ *
  * This node receives task requests from multi_task_bridge, parses JSON payloads,
  * converts them to MultiGoal messages, and publishes to /waypoint_goals topic
  * for the waypoint_nav package to execute.
@@ -27,7 +27,7 @@ public:
     task_count_(0)
   {
     // Declare parameters
-    this->declare_parameter<std::string>("agent_id", "uav1");
+    this->declare_parameter<std::string>("agent_id", "");
     this->declare_parameter<std::string>("default_waypoint_frame", "gps");
     this->declare_parameter<double>("default_velocity", 1.0);
     this->declare_parameter<double>("default_yaw", 0.0);
@@ -38,7 +38,22 @@ public:
     this->get_parameter("default_velocity", default_velocity_);
     this->get_parameter("default_yaw", default_yaw_);
 
-    // Create service server
+    // Fall back to the legacy default when nothing was supplied (e.g.
+    // legacy single-robot launches that don't set agent_id explicitly).
+    if (agent_id_.empty()) {
+      agent_id_ = "uav1";
+    }
+
+    // Service is ALWAYS on the absolute path /agent/{agent_id}/execute_task,
+    // independent of this node's namespace. This matches the convention used
+    // by the historical /agent/uav1/execute_task callers (and the upstream
+    // multi_task_bridge) and lets the same ROS domain host multiple robots
+    // (robot_a / robot_b) without each having to walk into its namespace to
+    // find the right endpoint.
+    //
+    // Topic stays RELATIVE so /waypoint_goals resolves to /{ns}/waypoint_goals
+    // when the node is launched inside `robot_namespace`, keeping the
+    // ExecuteTask → multi_goal_to_gp_goal chain namespaced.
     std::string service_name = "/agent/" + agent_id_ + "/execute_task";
     execute_task_service_ = this->create_service<execute_task_server::srv::ExecuteTask>(
       service_name,
@@ -47,12 +62,14 @@ public:
 
     // Create publisher for MultiGoal messages
     waypoint_goal_pub_ = this->create_publisher<msg_set_msgs::msg::MultiGoal>(
-      "/waypoint_goals", 10
+      "waypoint_goals", 10
     );
 
     RCLCPP_INFO(this->get_logger(), "ExecuteTask Node initialized");
-    RCLCPP_INFO(this->get_logger(), "  - Service: %s", service_name.c_str());
-    RCLCPP_INFO(this->get_logger(), "  - Publishing to: /waypoint_goals");
+    RCLCPP_INFO(this->get_logger(), "  - Service: %s (resolved: %s)",
+              service_name.c_str(), execute_task_service_->get_service_name());
+    RCLCPP_INFO(this->get_logger(), "  - Publishing to: waypoint_goals (resolved: %s)",
+              waypoint_goal_pub_->get_topic_name());
     RCLCPP_INFO(this->get_logger(), "  - Agent ID: %s", agent_id_.c_str());
     RCLCPP_INFO(this->get_logger(), "  - Default waypoint frame: %s", default_waypoint_frame_.c_str());
   }
@@ -60,7 +77,7 @@ public:
 private:
   /**
    * @brief Handle ExecuteTask service requests
-   * 
+   *
    * @param request_json JSON string containing task information
    * @param response_json JSON string containing execution result
    */
@@ -73,7 +90,7 @@ private:
     try {
       // Parse JSON request
       json request_data = json::parse(request->request_json);
-      
+
       // Extract mission information
       std::string mission_id = request_data.value("mission_id", "unknown_mission");
       std::string agent_id = request_data.value("agent_id", "");
@@ -90,19 +107,25 @@ private:
         return;
       }
 
+      // Default to goto_waypoints when the caller omits capability_id.
+      // New capability types can be added here without breaking the call site.
+      if (capability_id.empty()) {
+        capability_id = "goto_waypoints";
+      }
+
       // Handle different capability types
       if (capability_id == "goto_waypoints" || capability_id == "takeoff" || capability_id == "return") {
         // Parse waypoints and publish MultiGoal
         auto multi_goal = parseWaypoints(request_data);
-        
+
         if (multi_goal) {
           // Publish the MultiGoal message
           waypoint_goal_pub_->publish(*multi_goal);
-          
+
           task_count_++;
           RCLCPP_INFO(this->get_logger(), "Published MultiGoal with %zu waypoints (task #%zu)",
                       multi_goal->multi_goal_points.size(), task_count_);
-          
+
           // Create success response
           response->response_json = createSuccessResponse(mission_id, multi_goal->multi_goal_points.size());
         } else {
@@ -124,14 +147,14 @@ private:
 
   /**
    * @brief Parse waypoints from JSON request and create MultiGoal message
-   * 
+   *
    * @param request_data JSON object containing task parameters
    * @return Shared pointer to MultiGoal message, or nullptr if parsing failed
    */
   msg_set_msgs::msg::MultiGoal::SharedPtr parseWaypoints(const json & request_data)
   {
     auto multi_goal = std::make_shared<msg_set_msgs::msg::MultiGoal>();
-    
+
     // Get params object
     if (!request_data.contains("params")) {
       RCLCPP_ERROR(this->get_logger(), "Missing 'params' in request");
@@ -147,47 +170,87 @@ private:
     if (has_is_gps_aid) {
       is_gps_aid_override = params.value("is_gps_aid", false);
     }
-    
+
     std::string waypoint_frame = params.value("waypoint_frame", default_waypoint_frame_);
     // Use is_gps_aid from JSON if provided, otherwise derive from waypoint_frame
     multi_goal->is_gps_aid = has_is_gps_aid ? is_gps_aid_override : (waypoint_frame == "gps");
-    
+
     // Determine altitude frame
     multi_goal->is_gps_hgt = params.value("is_gps_hgt", false);
-    
+
     // Get control mode (default: 0 = vel & yawrate)
     multi_goal->ctl_mode = static_cast<int8_t>(params.value("ctl_mode", 0));
 
-    // Parse waypoints array
+    // Parse waypoints array. Each element may be either:
+    //   - a 2- or 3-element array  [lat|x, lon|y, alt|z]   (compact form)
+    //   - an object                 {"lat":..., "lon":..., "alt":...,
+    //                               "x":..., "y":..., "z":...,
+    //                               "yaw":..., "vel":...}  (legacy form)
     if (!params.contains("waypoints")) {
       RCLCPP_ERROR(this->get_logger(), "Missing 'waypoints' in params");
       return nullptr;
     }
 
     const auto & waypoints = params["waypoints"];
-    
-    for (const auto & wp : waypoints) {
+
+    for (size_t i = 0; i < waypoints.size(); ++i) {
+      const auto & wp = waypoints[i];
       msg_set_msgs::msg::MultiGoalPoint point;
-      
-      // Extract coordinates based on frame
-      if (multi_goal->is_gps_aid) {
-        // GPS coordinates (lat/lon/alt)
-        point.x_or_lat = wp.value("lat", 0.0);
-        point.y_or_lon = wp.value("lon", 0.0);
-        // point.z_or_alt = wp.value("alt", 0.0);
-        point.z_or_alt = 0.0;
+
+      if (wp.is_array()) {
+        // Compact form [x_or_lat, y_or_lon, z_or_alt]. 2- and 3-element
+        // arrays are accepted so the caller can omit alt/z.
+        if (wp.size() < 2 || wp.size() > 3) {
+          RCLCPP_ERROR(
+            this->get_logger(),
+            "waypoints[%zu] array must have 2 or 3 elements, got %zu",
+            i, wp.size());
+          return nullptr;
+        }
+        if (!wp[0].is_number() || !wp[1].is_number()) {
+          RCLCPP_ERROR(
+            this->get_logger(),
+            "waypoints[%zu] array values must be numeric", i);
+          return nullptr;
+        }
+        point.x_or_lat = wp[0].get<double>();
+        point.y_or_lon = wp[1].get<double>();
+        // GPS frame honors the optional 3rd element (alt); local frame is
+        // intentionally 2D so any extra element is ignored here. This keeps
+        // the legacy local-frame contract intact while letting GPS-frame
+        // tasks carry altitude without an object wrapper.
+        if (multi_goal->is_gps_aid && wp.size() == 3 && wp[2].is_number()) {
+          point.z_or_alt = wp[2].get<double>();
+        } else {
+          point.z_or_alt = 0.0;
+        }
+        point.yaw = static_cast<float>(default_yaw_);
+        point.vel = static_cast<float>(default_velocity_);
+      } else if (wp.is_object()) {
+        // Extract coordinates based on frame
+        if (multi_goal->is_gps_aid) {
+          // GPS coordinates (lat/lon/alt)
+          point.x_or_lat = wp.value("lat", 0.0);
+          point.y_or_lon = wp.value("lon", 0.0);
+          point.z_or_alt = wp.value("alt", 0.0);
+        } else {
+          // Local coordinates (x/y); z intentionally stays 0 — local-frame
+          // tasks are 2D by design.
+          point.x_or_lat = wp.value("x", 0.0);
+          point.y_or_lon = wp.value("y", 0.0);
+          point.z_or_alt = 0.0;
+        }
+
+        // Extract optional parameters
+        point.yaw = static_cast<float>(wp.value("yaw", default_yaw_));
+        point.vel = static_cast<float>(wp.value("vel", default_velocity_));
       } else {
-        // Local coordinates (x/y/z)
-        point.x_or_lat = wp.value("x", 0.0);
-        point.y_or_lon = wp.value("y", 0.0);
-        // point.z_or_alt = wp.value("z", 0.0);
-        point.z_or_alt = 0.0;
+        RCLCPP_ERROR(
+          this->get_logger(),
+          "waypoints[%zu] must be an array [lat,lon,alt] or an object", i);
+        return nullptr;
       }
-      
-      // Extract optional parameters
-      point.yaw = static_cast<float>(wp.value("yaw", default_yaw_));
-      point.vel = static_cast<float>(wp.value("vel", default_velocity_));
-      
+
       multi_goal->multi_goal_points.push_back(point);
     }
 

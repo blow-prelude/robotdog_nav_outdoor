@@ -71,8 +71,14 @@ class MultiGoalToGpGoal(Node):
     def __init__(self) -> None:
         super().__init__("multi_goal_to_gp_goal")
 
-        self.declare_parameter("input_topic", "/waypoint_goals")
-        self.declare_parameter("output_topic", "/gp_goal")
+        self.declare_parameter("input_topic", "waypoint_goals")
+        self.declare_parameter("output_topic", "gp_goal")
+        # odom_topic defaults to RELATIVE "odom" so the per-node namespace
+        # (set via launch `namespace=robot_namespace`) prefixes the topic to
+        # /{robot_namespace}/odom — matching the RELIABLE odom produced by
+        # mavros_odom_relay in launch_all_go2w.sh. Pass an absolute path
+        # explicitly when running un-namespaced.
+        self.declare_parameter("odom_topic", "odom")
         self.declare_parameter("frame_id", "gps")
         self.declare_parameter("navsat_status", 1)   # NavSatStatus.STATUS_FIX
         self.declare_parameter("navsat_service", 1)  # NavSatStatus.SERVICE_GPS
@@ -87,6 +93,9 @@ class MultiGoalToGpGoal(Node):
         self.declare_parameter("consecutive_required", 5)
         self.declare_parameter("check_period_s", 0.1)  # 10 Hz
 
+        # For logging only; the actual namespace is inherited from the launch tree.
+        self.declare_parameter("robot_namespace", "")
+
         # Inputs / Outputs
         self._sub = self.create_subscription(
             MultiGoal, self.get_parameter("input_topic").value, self._on_multi_goal, 10
@@ -95,10 +104,12 @@ class MultiGoalToGpGoal(Node):
             NavSatFix, self.get_parameter("output_topic").value, 10
         )
 
-        # odom QoS: best-effort like /mavros/local_position/odom
+        # odom QoS: best-effort compatible with /mavros/local_position/odom,
+        # but mavros_odom_relay re-publishes as RELIABLE so we still get data
+        # even when subscribing RELIABLE.
         odom_qos = QoSProfile(depth=10, reliability=qos_profile_sensor_data.reliability)
         self._odom_sub = self.create_subscription(
-            Odometry, "/mavros/local_position/odom", self._on_odom, odom_qos
+            Odometry, self.get_parameter("odom_topic").value, self._on_odom, odom_qos
         )
 
         # State
@@ -113,9 +124,17 @@ class MultiGoalToGpGoal(Node):
         self._check_timer = self.create_timer(period, self._on_check_tick)
 
         self.get_logger().info(
-            f"multi_goal_to_gp_goal: /waypoint_goals -> {self.get_parameter('output_topic').value} "
+            f"multi_goal_to_gp_goal: input={self.get_parameter('input_topic').value} -> "
+            f"output={self.get_parameter('output_topic').value}, "
+            f"odom={self.get_parameter('odom_topic').value} "
             f"(reach<{self.get_parameter('reach_threshold_m').value:.2f}m "
             f"x{self.get_parameter('consecutive_required').value}, {1.0/period:.0f}Hz)"
+        )
+        # Log the actual resolved topic names so namespace misconfiguration
+        # is visible at startup.
+        self.get_logger().info(
+            f"  resolved: sub={self._sub.topic_name}, pub={self._pub.topic_name}, "
+            f"odom_sub={self._odom_sub.topic_name}"
         )
 
     # ----- subscribers ----------------------------------------------------
