@@ -8,21 +8,31 @@
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
+#include <rclcpp/qos.hpp>
+
 namespace nav2_input_bridge
 {
 
 InputBridgeNode::InputBridgeNode(const rclcpp::NodeOptions & options)
 : Node("nav2_input_bridge", options)
 {
-  local_odom_topic_ = declare_parameter("local_odom_topic", std::string("/mavros/local_position/odom"));
-  goal_input_topic_ = declare_parameter("goal_input_topic", std::string("/gp_goal"));
-  uav_goal_input_topic_ = declare_parameter("uav_goal_input_topic", std::string("/uav/target_gps"));
-  target_detected_topic_ = declare_parameter("target_detected_topic", std::string("/target_detected"));
-  goal_output_topic_ = declare_parameter("goal_output_topic", std::string("/goal_pose"));
+  // Topic and action defaults are RELATIVE so the per-robot namespace (set
+  // via launch `namespace=robot_namespace`) prefixes them to
+  // /{robot_namespace}/... Namespaced endpoints keep multi-robot setups
+  // isolated on a shared DDS domain.
+  //
+  // ROS 2 mavros's local_position plugin publishes ~/odom (relative to the
+  // mavros namespace), not ~/local_position/odom — the latter path is
+  // ROS 1 legacy.
+  local_odom_topic_ = declare_parameter("local_odom_topic", std::string("mavros/odom"));
+  goal_input_topic_ = declare_parameter("goal_input_topic", std::string("gp_goal"));
+  uav_goal_input_topic_ = declare_parameter("uav_goal_input_topic", std::string("uav/target_gps"));
+  target_detected_topic_ = declare_parameter("target_detected_topic", std::string("target_detected"));
+  goal_output_topic_ = declare_parameter("goal_output_topic", std::string("goal_pose"));
   goal_output_frame_ = declare_parameter("goal_output_frame", std::string("map"));
   require_goal_fix_ = declare_parameter("require_nav_sat_fix", true);
   goal_yaw_from_bearing_ = declare_parameter("goal_yaw_from_bearing", false);
-  follow_path_action_topic_ = declare_parameter("follow_path_action_topic", std::string("/follow_path"));
+  follow_path_action_topic_ = declare_parameter("follow_path_action_topic", std::string("follow_path"));
 
   const double ref_lat = declare_parameter("reference_latitude", 0.0);
   const double ref_lon = declare_parameter("reference_longitude", 0.0);
@@ -45,8 +55,6 @@ InputBridgeNode::InputBridgeNode(const rclcpp::NodeOptions & options)
         ref_lat, ref_lon, ref_alt);
     }
   }
-
-  tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
   rclcpp::QoS odom_qos(10);
   odom_qos.best_effort();
@@ -75,20 +83,36 @@ InputBridgeNode::InputBridgeNode(const rclcpp::NodeOptions & options)
   follow_path_action_client_ = rclcpp_action::create_client<FollowPath>(
     this,
     follow_path_action_topic_);
+
+  // TF broadcaster for odom -> base_link. We broadcast from the mavros odom
+  // we already subscribe to (the installed mavros C++ plugin could also do it
+  // with local_position.tf.send=true, but doing it here is independent of
+  // mavros build/version quirks — see header comment).
+  //
+  // Frame names must include the namespace prefix; TF frame_ids are
+  // literal strings (no ROS namespace prefixing) and tf2 strips the leading
+  // slash on broadcast, so /{ns}/odom lands in the tree as {ns}/odom.
+  // Resolve them against this node's fully-qualified namespace.
+  const std::string ns = this->get_namespace();
+  tf_frame_id_ = (ns.empty() || ns == "/") ? "odom" : ns + "/odom";
+  tf_child_frame_id_ = (ns.empty() || ns == "/") ? "base_link" : ns + "/base_link";
+  tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+
+  RCLCPP_INFO(
+    get_logger(),
+    "TF broadcaster: %s -> %s (subscribed to %s)",
+    tf_frame_id_.c_str(), tf_child_frame_id_.c_str(), local_odom_topic_.c_str());
 }
 
 void InputBridgeNode::onOdom(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
-  if (msg->header.frame_id.empty() || msg->child_frame_id.empty()) {
-    RCLCPP_WARN_THROTTLE(
-      get_logger(), *get_clock(), 5000,
-      "Odometry: empty frame_id or child_frame_id");
+  if (!tf_broadcaster_) {
     return;
   }
   geometry_msgs::msg::TransformStamped t;
   t.header.stamp = msg->header.stamp;
-  t.header.frame_id = msg->header.frame_id;
-  t.child_frame_id = msg->child_frame_id;
+  t.header.frame_id = tf_frame_id_;
+  t.child_frame_id = tf_child_frame_id_;
   t.transform.translation.x = msg->pose.pose.position.x;
   t.transform.translation.y = msg->pose.pose.position.y;
   // t.transform.translation.z = msg->pose.pose.position.z;
@@ -191,8 +215,10 @@ void InputBridgeNode::processGoalFix(
   if (require_goal_fix_ &&
     msg->status.status == sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX)
   {
+    // Throttle to 500ms (was 3000ms) so manual-pub failures surface in logs
+    // within a second rather than after three.
     RCLCPP_WARN_THROTTLE(
-      get_logger(), *get_clock(), 3000,
+      get_logger(), *get_clock(), 500,
       "%s goal has no GPS fix", source.c_str());
     return;
   }

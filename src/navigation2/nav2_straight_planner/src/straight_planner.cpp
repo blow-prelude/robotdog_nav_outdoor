@@ -22,7 +22,9 @@ StraightPlanner::StraightPlanner(const rclcpp::NodeOptions & options)
   declare_parameter("planning_period_s", 1.0);
   declare_parameter("controller_id", std::string("FollowPath"));
   declare_parameter("goal_checker_id", std::string("general_goal_checker"));
-  declare_parameter("follow_path_action", std::string("/follow_path"));
+  // Relative name so the action resolves to /{robot_namespace}/follow_path,
+  // matching controller_server's default action name inside the same namespace.
+  declare_parameter("follow_path_action", std::string("follow_path"));
 }
 
 nav2_util::CallbackReturn

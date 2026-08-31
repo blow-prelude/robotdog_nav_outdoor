@@ -28,6 +28,11 @@ public:
     this->declare_parameter("cmd_timeout_sec", 0.5);
     this->declare_parameter("startup_delay_sec", 2.0);
     this->declare_parameter("require_ready", true);
+    this->declare_parameter("cmd_vel_topic", std::string("cmd_vel"));
+    this->declare_parameter("state_topic", std::string("/lf/sportmodestate"));
+    this->declare_parameter("imu_topic", std::string("go2w/imu"));
+    this->declare_parameter("battery_topic", std::string("go2w/battery"));
+    this->declare_parameter("imu_frame_id", std::string("go2w_imu_link"));
 
     float vx_max = static_cast<float>(this->get_parameter("vx_max").as_double());
     float vy_max = static_cast<float>(this->get_parameter("vy_max").as_double());
@@ -35,6 +40,11 @@ public:
     cmd_timeout_ = this->get_parameter("cmd_timeout_sec").as_double();
     double startup_delay = this->get_parameter("startup_delay_sec").as_double();
     bool require_ready = this->get_parameter("require_ready").as_bool();
+    std::string cmd_vel_topic = this->get_parameter("cmd_vel_topic").as_string();
+    std::string state_topic = this->get_parameter("state_topic").as_string();
+    std::string imu_topic = this->get_parameter("imu_topic").as_string();
+    std::string battery_topic = this->get_parameter("battery_topic").as_string();
+    std::string imu_frame_id = this->get_parameter("imu_frame_id").as_string();
 
     // 为了在开发机上测试，这里先手动改为了 robot_ready_
     if (!require_ready) {
@@ -43,7 +53,7 @@ public:
     }
 
     cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-        "/cmd_vel", 1,
+        cmd_vel_topic, 1,
         [this, vx_max, vy_max, vyaw_max](
             const geometry_msgs::msg::Twist::SharedPtr cmd) {
           if (!robot_ready_) {
@@ -62,7 +72,7 @@ public:
         });
 
     state_sub_ = create_subscription<unitree_go::msg::SportModeState>(
-        "/lf/sportmodestate", 1,
+        state_topic, 1,
         [this](const unitree_go::msg::SportModeState::SharedPtr msg) {
           state_ = *msg;
           state_received_ = true;
@@ -73,9 +83,9 @@ public:
           }
         });
 
-    imu_pub_ = create_publisher<sensor_msgs::msg::Imu>("/go2w/imu", 10);
+    imu_pub_ = create_publisher<sensor_msgs::msg::Imu>(imu_topic, 10);
     battery_pub_ =
-        create_publisher<std_msgs::msg::Float32>("/go2w/battery", 10);
+        create_publisher<std_msgs::msg::Float32>(battery_topic, 10);
 
     move_timer_ = create_wall_timer(
         100ms, [this]() {
@@ -95,14 +105,14 @@ public:
         });
 
     state_timer_ = create_wall_timer(
-        50ms, [this]() {
+        50ms, [this, imu_frame_id]() {
           if (!state_received_) {
             return;
           }
 
           sensor_msgs::msg::Imu imu_msg;
           imu_msg.header.stamp = now();
-          imu_msg.header.frame_id = "go2w_imu_link";
+          imu_msg.header.frame_id = imu_frame_id;
 
           const auto &q = state_.imu_state.quaternion;
           imu_msg.orientation.x = q[0];
@@ -142,6 +152,11 @@ public:
     RCLCPP_INFO(get_logger(), "  vx_max=%.2f, vy_max=%.2f, vyaw_max=%.2f",
                 vx_max, vy_max, vyaw_max);
     RCLCPP_INFO(get_logger(), "  cmd_timeout=%.2fs", cmd_timeout_);
+    RCLCPP_INFO(get_logger(), "  cmd_vel_topic=%s", cmd_vel_topic.c_str());
+    RCLCPP_INFO(get_logger(), "  state_topic=%s", state_topic.c_str());
+    RCLCPP_INFO(get_logger(), "  imu_topic=%s", imu_topic.c_str());
+    RCLCPP_INFO(get_logger(), "  battery_topic=%s", battery_topic.c_str());
+    RCLCPP_INFO(get_logger(), "  imu_frame_id=%s", imu_frame_id.c_str());
   }
 
 private:

@@ -9,16 +9,21 @@ public:
         vx_max_ = this->declare_parameter("vx_max", 1.5);
         vyaw_max_ = this->declare_parameter("vyaw_max", 1.0);
         threshold_ = this->declare_parameter("activation_threshold", 0.05);
+        // External control station publishes mavros_msgs/ManualControl at
+        // /{robot_namespace}/control/body_cmd. The launch file derives this
+        // from the same robot_namespace used for the rest of the stack.
+        this->declare_parameter("remote_cmd_topic", std::string("control/body_cmd"));
+        std::string remote_cmd_topic = this->get_parameter("remote_cmd_topic").as_string();
 
         remote_sub_ = this->create_subscription<mavros_msgs::msg::ManualControl>(
-            "/usv_1/control/body_cmd", 1,
+            remote_cmd_topic, 1,
             [this](const mavros_msgs::msg::ManualControl::SharedPtr msg) {
                 onRemoteCmd(msg);
             });
 
-        cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel_remote", 1);
+        cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("cmd_vel_remote", 1);
 
-        RCLCPP_INFO(this->get_logger(), "Remote override node started");
+        RCLCPP_INFO(this->get_logger(), "Remote override node started (cmd_topic=%s)", remote_cmd_topic.c_str());
     }
 
 private:

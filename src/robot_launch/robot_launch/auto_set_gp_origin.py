@@ -20,14 +20,44 @@ class AutoSetGpOrigin(Node):
         self.tolerance_deg = self.declare_parameter("verify_tolerance_deg", 1e-6).value
         self.max_retries = self.declare_parameter("max_retries", 3).value
         self.verify_timeout_s = self.declare_parameter("verify_timeout_s", 5.0).value
+        # mavros_ns is the MAVROS node's namespace (e.g. "robot_a"). The MAVROS
+        # node itself is named "mavros" under that namespace.
+        #
+        # IMPORTANT topic note: mavros's plugin allowlist loading loses the
+        # per-plugin sub-namespace, so the global_position plugin's topics live
+        # at "/{mavros_ns}/mavros/set_gp_origin" and "/{mavros_ns}/mavros/gp_origin"
+        # (NO "global_position/" prefix — verified live on the domain).
+        # In full-plugin-load mode they would be at ".../global_position/...".
+        # To be robust to both layouts we publish to BOTH set_gp_origin topics
+        # and subscribe to BOTH gp_origin topics.
+        self.mavros_ns = self.declare_parameter("mavros_ns", "mavros").value
 
         if abs(self.lat) > 90.0 or abs(self.lon) > 180.0:
             self.get_logger().error("Invalid latitude/longitude parameters")
             sys.exit(1)
 
-        self.pub = self.create_publisher(GeoPointStamped, "/mavros/global_position/set_gp_origin", 10)
-        self.sub = self.create_subscription(
-            GeoPointStamped, "/mavros/global_position/gp_origin", self.on_gp_origin, qos_profile_sensor_data
+        set_gp_origin_topics = [
+            f"/{self.mavros_ns}/mavros/set_gp_origin",
+            f"/{self.mavros_ns}/mavros/global_position/set_gp_origin",
+        ]
+        gp_origin_topics = [
+            f"/{self.mavros_ns}/mavros/gp_origin",
+            f"/{self.mavros_ns}/mavros/global_position/gp_origin",
+        ]
+
+        self.pubs = [
+            self.create_publisher(GeoPointStamped, topic, 10)
+            for topic in set_gp_origin_topics
+        ]
+        self.subs = [
+            self.create_subscription(
+                GeoPointStamped, topic, self.on_gp_origin, qos_profile_sensor_data
+            )
+            for topic in gp_origin_topics
+        ]
+        self.get_logger().info(
+            f"Publishing set_gp_origin on: {set_gp_origin_topics}; "
+            f"subscribing gp_origin on: {gp_origin_topics}"
         )
 
         self.verified = False
@@ -62,7 +92,8 @@ class AutoSetGpOrigin(Node):
         msg.position.latitude = self.lat
         msg.position.longitude = self.lon
         msg.position.altitude = self.alt
-        self.pub.publish(msg)
+        for pub in self.pubs:
+            pub.publish(msg)
         self.get_logger().info(
             f"Published set_gp_origin [{self.lat:.8f}, {self.lon:.8f}, {self.alt:.3f}] (attempt {self.retry_count}/{self.max_retries})"
         )

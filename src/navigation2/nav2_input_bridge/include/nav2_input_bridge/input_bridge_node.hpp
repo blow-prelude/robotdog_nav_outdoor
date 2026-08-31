@@ -7,6 +7,7 @@
 #include <string>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -56,9 +57,17 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_planner_pub_;
 
-  rclcpp_action::Client<FollowPath>::SharedPtr follow_path_action_client_;
-
+  // Broadcasts /{ns}/odom -> /{ns}/base_link from the mavros odom topic.
+  // (The installed mavros C++ local_position plugin CAN also broadcast this
+  // TF when local_position.tf.send=true, but we do it here so the TF exists
+  // independent of mavros build/version quirks, and from the exact same odom
+  // that feeds the costmap. Without this TF the costmap/follow_path time out
+  // with "unconnected trees".)
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  std::string tf_frame_id_;
+  std::string tf_child_frame_id_;
+
+  rclcpp_action::Client<FollowPath>::SharedPtr follow_path_action_client_;
 
   std::mutex origin_mutex_;
   bool origin_valid_{false};

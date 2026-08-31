@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Relay /mavros/local_position/odom (BEST_EFFORT) to /odom (RELIABLE).
+"""Relay mavros odom (BEST_EFFORT) to /{ns}/odom (RELIABLE).
 
-mavros publishes /mavros/local_position/odom with BEST_EFFORT QoS.
-Nav2 controller_server subscribes to its odom_topic with RELIABLE QoS by
-default — the two are incompatible, so Nav2 silently never receives odom
-and never publishes /cmd_vel. This node bridges the two QoS regimes by
-re-publishing each incoming odom with RELIABLE.
+mavros publishes /{ns}/mavros/odom (the local_position plugin's ~/odom)
+with BEST_EFFORT QoS. Nav2 controller_server subscribes to its odom_topic
+with RELIABLE QoS by default — the two are incompatible, so Nav2 silently
+never receives odom and never publishes /cmd_vel. This node bridges the two
+QoS regimes by re-publishing each incoming odom with RELIABLE.
 """
 
 import rclpy
@@ -19,8 +19,8 @@ class OdomRelay(Node):
     def __init__(self) -> None:
         super().__init__("mavros_odom_relay")
 
-        self.declare_parameter("input_topic", "/mavros/local_position/odom")
-        self.declare_parameter("output_topic", "/odom")
+        self.declare_parameter("input_topic", "mavros/odom")
+        self.declare_parameter("output_topic", "odom")
         self.declare_parameter("frame_id_rewrite", "")
 
         in_topic = self.get_parameter("input_topic").value

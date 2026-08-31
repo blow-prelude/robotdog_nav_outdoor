@@ -9,7 +9,7 @@ base_to_odom_tf:
 controller_server:
   ros__parameters:
     use_sim_time: false
-    odom_topic: /odom  # RELIABLE; bridged from /mavros/local_position/odom by mavros_odom_relay
+    odom_topic: odom  # RELATIVE: resolves to /{robot_namespace}/odom (RELIABLE, bridged from /mavros/odom by mavros_odom_relay)
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.05
     min_y_velocity_threshold: 0.05
@@ -62,7 +62,9 @@ straight_planner:
     planning_period_s: 0.5
     controller_id: FollowPath
     goal_checker_id: general_goal_checker
-    follow_path_action: /follow_path
+    # Relative name so the action resolves to /{robot_namespace}/follow_path
+    # (matches the controller_server action name set in go2w_nav2.launch.py).
+    follow_path_action: follow_path
 
 local_costmap:
   local_costmap:
@@ -72,6 +74,11 @@ local_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: false
+      # Allow up to 1s of TF staleness while PX4 EKF2 warms up; the static
+      # `map -> odom` publisher comes up immediately but PX4's
+      # `odom -> base_link` only starts broadcasting after EKF2 initialization
+      # following the first heartbeat + sensor data.
+      transform_tolerance: 1.0
       rolling_window: true
       width: 12
       height: 12
@@ -118,7 +125,7 @@ lifecycle_manager_navigation:
 nav2_input_bridge:
   ros__parameters:
     use_sim_time: false
-    local_odom_topic: "/mavros/local_position/odom"
+    local_odom_topic: "mavros/odom"  # ROS 2 mavros publishes ~/odom; ROS 1 used local_position/odom
 #乌兰察布
     reference_latitude: 40.9445353
     reference_longitude: 113.172819
@@ -137,10 +144,10 @@ nav2_input_bridge:
 #    reference_latitude: 30.7939518
 #    reference_longitude: 120.8104288
 #    reference_altitude: 12.07629405266946
-    goal_input_topic: "/gp_goal"
-    uav_goal_input_topic: "/uav/target_gps"
-    target_detected_topic: "/target_detected"
-    goal_output_topic: "/goal_pose"
+    goal_input_topic: "gp_goal"
+    uav_goal_input_topic: "uav/target_gps"
+    target_detected_topic: "target_detected"
+    goal_output_topic: "goal_pose"
     goal_output_frame: "map"
-    require_nav_sat_fix: true
+    require_nav_sat_fix: false  # accept status=0 manual pub; production sends status=1 anyway
     goal_yaw_from_bearing: false

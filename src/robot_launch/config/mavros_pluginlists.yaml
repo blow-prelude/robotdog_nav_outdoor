@@ -7,7 +7,13 @@
       - command           # 解锁/上锁、模式切换
       - param             # 读写 PX4 参数
       - imu               # /mavros/imu/data；local_position 插件需要它来填 pose.orientation，否则恒为 (0,0,0,1)
-      - local_position    # /mavros/local_position/odom (controller_server, input_bridge 依赖)
-      - global_position   # /mavros/global_position/gp_origin (auto_set_gp_origin 依赖)
+      - local_position    # /{ns}/mavros/odom (controller_server, input_bridge 依赖；ROS 2 mavros 发布 ~/odom 而非 local_position/odom)
+      - global_position   # /{ns}/mavros/gp_origin (auto_set_gp_origin 依赖；白名单模式下无 global_position/ 子命名空间)
       - vision_pose       # /mavros/vision_pose/pose (vio_bridge 向 PX4 注入 VIO 位姿)
-      - waypoint          # 航点任务管理
+      # 注意：不要同时启用 waypoint 和 param！mavros 2.14.0（2026-03 构建）里
+      # 两者都会创建名为 "~/pull" 的服务（ParamPull vs WaypointPull，类型不同），
+      # rcl 报 "create_service() called for existing request topic ... incompatible
+      # type" 直接崩溃。狗的导航走 ROS 侧（execute_task→multi_goal_to_gp_goal→
+      # nav2_input_bridge），不用 PX4 机载航点，故这里不加载 waypoint。
+      # 如确需 waypoint，请先用 apt 升级 mavros（2026-08-04 之后的构建已无此冲突）。
+
