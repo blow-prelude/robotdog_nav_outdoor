@@ -17,10 +17,23 @@ The namespaced topics chain together:
     /{ns}/gp_goal               (NavSatFix, one waypoint at a time)
     /{ns}/odom                  (input to multi_goal_to_gp_goal)
 
-3/4 are optional (MQTT command chain): comment out the corresponding block when
-unused. swarms_backend's ament package name is `backend_nodes`; build it first
-with `colcon build --packages-select backend_nodes`. Both packages do NOT accept
-an external ROS namespace - they self-namespace via their ID params and must run
+3/4 are the optional MQTT command chain, gated by the single mqtt switch: they
+are OFF by default (mqtt:=false) and both start together with mqtt:=true, so
+no file editing is needed:
+
+    ros2 launch robot_launch task_pipeline.launch.py robot_namespace:=robot_a \\
+        mqtt:=true address:=tcp://127.0.0.1:1883 mqtt_username:=admin mqtt_passwd:=nanhu@2020
+
+Topic-name consistency rule: usv_sn / drone_name default to robot_namespace and
+must stay equal to it (keep prefix empty), so the whole chain self-namespaces
+under the same /{ns}/:
+
+    MQTT -> /{ns}/swarms_backend/global/multitask -> /agent/{ns}/execute_task
+         -> /{ns}/waypoint_goals -> /{ns}/gp_goal
+
+swarms_backend's ament package name is `backend_nodes`; build it first with
+`colcon build --packages-select backend_nodes`. Both packages do NOT accept an
+external ROS namespace - they self-namespace via their ID params and must run
 at the root namespace.
 
 Usage:
@@ -36,6 +49,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -48,6 +62,61 @@ def generate_launch_description():
         default_value="",
         description="Per-robot namespace. Pass the same value used for "
                     "launch_all_go2w.sh (e.g. robot_a) so topics align.",
+    )
+
+    # ===== MQTT 指控链路（blocks 3/4）开关与参数 =====
+    # 单个 mqtt 开关同时启用 swarms_backend 与 multi_task_bridge；
+    # 默认 false（两个块不启动），mqtt:=true 一起启动，无需改本文件。
+    declare_mqtt = DeclareLaunchArgument(
+        "mqtt",
+        default_value="false",
+        description="Enable the MQTT command chain: swarms_backend (backend_nodes) "
+                    "and multi_task_bridge together.",
+    )
+    declare_usv_sn = DeclareLaunchArgument(
+        "usv_sn",
+        default_value=LaunchConfiguration("robot_namespace"),
+        description="swarms_backend SN; must equal robot_namespace (and keep "
+                    "prefix empty) so it self-namespaces to /{ns}/.",
+    )
+    declare_prefix = DeclareLaunchArgument(
+        "prefix",
+        default_value="",
+        description="swarms_backend topic prefix; keep empty so the namespace "
+                    "is exactly /{usv_sn}/.",
+    )
+    declare_vehicle_id = DeclareLaunchArgument(
+        "vehicle_id",
+        default_value="1",
+        description="swarms_backend traditional-mode ID; must match the "
+                    "drones_id in MQTT messages.",
+    )
+    declare_address = DeclareLaunchArgument(
+        "address",
+        default_value="tcp://127.0.0.1:1883",
+        description="MQTT broker URL.",
+    )
+    declare_mqtt_username = DeclareLaunchArgument(
+        "mqtt_username",
+        default_value="admin",
+        description="MQTT username.",
+    )
+    declare_mqtt_passwd = DeclareLaunchArgument(
+        "mqtt_passwd",
+        default_value="nanhu@2020",
+        description="MQTT password.",
+    )
+    declare_drone_name = DeclareLaunchArgument(
+        "drone_name",
+        default_value=LaunchConfiguration("robot_namespace"),
+        description="multi_task_bridge robot name; must equal robot_namespace "
+                    "so it calls /agent/{ns}/execute_task.",
+    )
+    declare_drone_id = DeclareLaunchArgument(
+        "drone_id",
+        default_value="1",
+        description="multi_task_bridge numeric drone id; must match the "
+                    "drones_id in MQTT messages.",
     )
 
     # 1. execute_task_server: ExecuteTask service -> MultiGoal on /waypoint_goals
@@ -82,8 +151,8 @@ def generate_launch_description():
     )
 
     # ===================== optional: MQTT command chain =====================
-    # Comment out blocks 3 and 4 when the command chain is not used
-    # (execute_task can still be called manually).
+    # Both blocks are gated by the single mqtt switch (mqtt:=true to enable);
+    # execute_task can still be called manually when mqtt:=false.
     # NOTE: neither package accepts an external ROS namespace; both must run at
     # the ROOT namespace and self-namespace via their ID params. The IDs must
     # match robot_namespace (robot_a), and multi_task_bridge's drone_id must
@@ -93,6 +162,7 @@ def generate_launch_description():
     #    /{ns}/swarms_backend/global/multitask
     #    !!! build first: colcon build --packages-select backend_nodes
     #    usv_sn:=robot_a + prefix:="" -> swarms_backend self-namespace = /robot_a
+    #    由 mqtt:=true 启用。
     swarms_backend_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -102,13 +172,19 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            "usv_sn": ns,
-            "prefix": "",
+            "usv_sn": LaunchConfiguration("usv_sn"),
+            "prefix": LaunchConfiguration("prefix"),
+            "vehicle_id": LaunchConfiguration("vehicle_id"),
+            "address": LaunchConfiguration("address"),
+            "mqtt_username": LaunchConfiguration("mqtt_username"),
+            "mqtt_passwd": LaunchConfiguration("mqtt_passwd"),
         }.items(),
+        condition=IfCondition(LaunchConfiguration("mqtt")),
     )
 
     # 4. multi_task_bridge: /{ns}/swarms_backend/global/multitask ->
     #    calls /agent/{ns}/execute_task
+    #    由 mqtt:=true 启用。
     multi_task_bridge_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -118,15 +194,26 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            "drone_name": ns,
-            "drone_id": "1",
+            "drone_name": LaunchConfiguration("drone_name"),
+            "drone_id": LaunchConfiguration("drone_id"),
         }.items(),
+        condition=IfCondition(LaunchConfiguration("mqtt")),
     )
 
     return LaunchDescription([
         declare_robot_namespace,
+        declare_mqtt,
+        declare_usv_sn,
+        declare_prefix,
+        declare_vehicle_id,
+        declare_address,
+        declare_mqtt_username,
+        declare_mqtt_passwd,
+        declare_drone_name,
+        declare_drone_id,
         execute_task_launch,
         multi_goal_to_gp_goal_launch,
-       # swarms_backend_launch,
-       # multi_task_bridge_launch,
+        # blocks 3/4 由 mqtt:=true 一起启用（默认关闭）
+        swarms_backend_launch,
+        multi_task_bridge_launch,
     ])
