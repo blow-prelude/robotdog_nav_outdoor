@@ -300,13 +300,19 @@ def generate_launch_description():
     # single-robot whitelist, just namespaced).
     #
     # IMPORTANT: the whitelist must be a LIST OF LISTS OF SUBSTITUTIONS, e.g.
-    # [TextSubstitution("^"), ns, TextSubstitution("/tf$")]. launch_ros
+    # [TextSubstitution("^/"), ns, TextSubstitution("/tf$")]. launch_ros
     # evaluates that shape into a string_array at runtime. Do NOT use an
     # f-string on `ns` (it serializes the LaunchConfiguration object, not its
     # value), and do NOT pass an empty [] (humble launch_ros normalizes an
     # empty list to () and raises "Expected 'value' ... but got '()'").
+    #
+    # NOTE: the regex must start with "^/" — foxglove matches against the
+    # fully-qualified topic name INCLUDING its leading slash (e.g. the odom
+    # topic is "/robot_a/odom"), so "^robot_a/odom$" (missing the slash)
+    # matches NOTHING and the bridge silently forwards no topics.
+    # (Exception: /tf and /tf_static stay at ROOT — see topic_whitelist.)
     def _wl(pattern):
-        return [TextSubstitution(text='^'), ns, TextSubstitution(text=pattern)]
+        return [TextSubstitution(text='^/'), ns, TextSubstitution(text=pattern)]
 
     foxglove_bridge_node = Node(
         package="foxglove_bridge",
@@ -318,8 +324,16 @@ def generate_launch_description():
                 "port": 8765,
                 "address": "0.0.0.0",
                 "topic_whitelist": [
-                    _wl('/tf$'),
-                    _wl('/tf_static$'),
+                    # /tf and /tf_static are published on the ROOT topics:
+                    # tf2_ros broadcasters hardcode the ABSOLUTE topic name
+                    # ("/tf", "/tf_static"), independent of the node
+                    # namespace — only the FRAMES inside are per-robot
+                    # (robot_a/map, robot_a/odom, ...). So these two must be
+                    # whitelisted at root ("^/tf$"), NOT under /{ns}/.
+                    # Namespacing them (as my earlier ^/robot_a/ version did)
+                    # matches nothing and foxglove silently gets no TF at all.
+                    "^/tf$",
+                    "^/tf_static$",
                     _wl('/odom$'),
                     _wl('/local_costmap/costmap$'),
                     _wl('/received_global_plan$'),

@@ -89,13 +89,19 @@ InputBridgeNode::InputBridgeNode(const rclcpp::NodeOptions & options)
   // with local_position.tf.send=true, but doing it here is independent of
   // mavros build/version quirks — see header comment).
   //
-  // Frame names must include the namespace prefix; TF frame_ids are
-  // literal strings (no ROS namespace prefixing) and tf2 strips the leading
-  // slash on broadcast, so /{ns}/odom lands in the tree as {ns}/odom.
-  // Resolve them against this node's fully-qualified namespace.
+  // Frame names must include the namespace prefix WITHOUT a leading slash:
+  // get_namespace() returns "/robot_a", and the slash must be stripped so the
+  // emitted frame_id is "robot_a/odom". tf2's Buffer strips a leading "/" when
+  // RECEIVING (so nav still worked with "/robot_a/odom"), but the slash stays
+  // in the raw /tf message — foxglove and other non-tf2 consumers treat
+  // "robot_a/odom" and "/robot_a/odom" as DIFFERENT frames, splitting the TF
+  // tree (static TF uses slash-less "robot_a/map") and breaking map->base_link.
+  // Keep the frames slash-less here to match the static publishers.
   const std::string ns = this->get_namespace();
-  tf_frame_id_ = (ns.empty() || ns == "/") ? "odom" : ns + "/odom";
-  tf_child_frame_id_ = (ns.empty() || ns == "/") ? "base_link" : ns + "/base_link";
+  const std::string prefix =
+    (ns.empty() || ns == "/") ? "" : ns.substr(1);  // strip leading '/'
+  tf_frame_id_ = prefix.empty() ? "odom" : prefix + "/odom";
+  tf_child_frame_id_ = prefix.empty() ? "base_link" : prefix + "/base_link";
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
   RCLCPP_INFO(
